@@ -45,6 +45,9 @@ export interface BookingFormData {
   jobDescription: string;
   specialInstructions: string;
   urgentJob: boolean;
+
+  /** ✅ NEW: store user's selected payment method */
+  paymentMethod: "cash" | "card" | "online" | "";
 }
 
 const SLOT_LABEL_BY_KEY: Record<string, string> = {
@@ -86,6 +89,8 @@ const BookingForm = () => {
     jobDescription: "",
     specialInstructions: "",
     urgentJob: false,
+    /** ✅ NEW default */
+    paymentMethod: "",
   });
 
   const totalSteps = 3;
@@ -157,16 +162,16 @@ const BookingForm = () => {
       jobDescription: merged.jobDescription,
       specialInstructions: merged.specialInstructions || undefined,
       urgentJob: merged.urgentJob,
+
+      /** ✅ NEW: send to backend so it saves in Google Sheets */
+      paymentMethod: merged.paymentMethod,
     };
 
     setFormData(merged);
 
     try {
-      // sanity log in browser to verify payload contains wasteTypes & wasteTypesSelected
       console.log("POST →", payload);
-
       await submitBookingToGoogleSheets(payload);
-
       sonner.success("Booking saved to Google Sheets");
       setIsSubmitted(true);
     } catch (err) {

@@ -10,32 +10,38 @@ import {
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Calendar } from "@/components/ui/calendar";
-import {
-  Popover, PopoverContent, PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar as CalendarIcon, MapPin, Clock, User, Phone, ChevronLeft } from "lucide-react";
 import { format, startOfToday } from "date-fns";
 import { cn } from "@/lib/utils";
 import { BookingFormData } from "@/components/BookingForm";
 
-/** ✅ Keep these in sync with Apps Script TIME_SLOTS */
+/** 24-hour display labels (keys MUST stay in sync with Apps Script TIME_SLOTS) */
 const TIME_SLOTS = [
   { key: "ANY",       label: "Any time" },
-  { key: "6_9_AM",    label: "6-9am" },
-  { key: "9_12_AM",   label: "9-12am" },
-  { key: "12_3_PM",   label: "12-3pm" },
-  { key: "3_6_PM",    label: "3-6pm" },
-  { key: "6_9_PM",    label: "6-9pm" },
-  { key: "AFTER_9PM", label: "After 9pm" },
+  { key: "6_9_AM",    label: "06:00–09:00" },
+  { key: "9_12_AM",   label: "09:00–12:00" },
+  { key: "12_3_PM",   label: "12:00–15:00" },
+  { key: "3_6_PM",    label: "15:00–18:00" },
+  { key: "6_9_PM",    label: "18:00–21:00" },
+  { key: "AFTER_9PM", label: "After 21:00" },
 ] as const;
+
+/** Fallback map for old 12-hour labels → keys (in case initialData has legacy text) */
+const LEGACY_LABEL_TO_KEY: Record<string, typeof TIME_SLOTS[number]["key"]> = {
+  "any time": "ANY",
+  "6-9am": "6_9_AM",
+  "9-12am": "9_12_AM",
+  "12-3pm": "12_3_PM",
+  "3-6pm": "3_6_PM",
+  "6-9pm": "6_9_PM",
+  "after 9pm": "AFTER_9PM",
+};
 
 const formSchema = z
   .object({
     collectionDate: z.date({ required_error: "Collection date is required" }),
-    /** ✅ Use the slot KEY to match server (e.g. ANY, 6_9_AM, etc.) */
     collectionTimeSlot: z.string().min(1, "Please select a time slot"),
     postcode: z
       .string()
@@ -61,8 +67,7 @@ const formSchema = z
       return true;
     },
     {
-      message:
-        "Contact name and phone number are required when using different contact details",
+      message: "Contact name and phone number are required when using different contact details",
       path: ["collectionContactName"],
     }
   );
@@ -78,13 +83,17 @@ export const StepTwo: React.FC<StepTwoProps> = ({ initialData, onNext, onBack })
     resolver: zodResolver(formSchema),
     defaultValues: {
       collectionDate: initialData.collectionDate ?? startOfToday(),
-      /** if older data had collectionTime (label), try to map back to a key */
+      // prefer key from saved data; else try to map legacy label; else blank
       collectionTimeSlot:
         initialData.collectionTimeSlot ??
         ((): string => {
-          const label = initialData.collectionTime ?? "";
-          const hit = TIME_SLOTS.find(t => t.label === label);
-          return hit?.key ?? "";
+          const legacy = (initialData.collectionTime ?? "").toLowerCase().trim();
+          if (legacy && LEGACY_LABEL_TO_KEY[legacy]) return LEGACY_LABEL_TO_KEY[legacy];
+          // loose include match
+          const hit = Object.entries(LEGACY_LABEL_TO_KEY).find(([lbl]) =>
+            legacy.includes(lbl)
+          );
+          return hit?.[1] ?? "";
         })(),
       postcode: (initialData.postcode ?? "").toUpperCase(),
       addressLine1: initialData.addressLine1 ?? "",
@@ -100,12 +109,11 @@ export const StepTwo: React.FC<StepTwoProps> = ({ initialData, onNext, onBack })
   const sameContact = form.watch("sameContact");
 
   const onSubmit = (values: z.infer<typeof formSchema>) => {
-    // mirror the label to collectionTime for backward compatibility with server code
     const label = TIME_SLOTS.find(t => t.key === values.collectionTimeSlot)?.label ?? "";
     onNext({
       collectionDate: values.collectionDate,
-      collectionTimeSlot: values.collectionTimeSlot, // ✅ server prefers this
-      collectionTime: label,                         // ✅ legacy/compat field
+      collectionTimeSlot: values.collectionTimeSlot, // server uses key
+      collectionTime: label,                         // human label (24-hour display)
       postcode: values.postcode.toUpperCase(),
       addressLine1: values.addressLine1,
       addressLine2: values.addressLine2,
@@ -148,11 +156,7 @@ export const StepTwo: React.FC<StepTwoProps> = ({ initialData, onNext, onBack })
                             !field.value && "text-muted-foreground"
                           )}
                         >
-                          {field.value ? (
-                            format(field.value, "PPP")
-                          ) : (
-                            <span>Pick a date</span>
-                          )}
+                          {field.value ? format(field.value, "PPP") : <span>Pick a date</span>}
                           <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
                         </Button>
                       </FormControl>
@@ -173,7 +177,7 @@ export const StepTwo: React.FC<StepTwoProps> = ({ initialData, onNext, onBack })
               )}
             />
 
-            {/* Time Slot (matches Apps Script TIME_SLOTS) */}
+            {/* Time Slot (24-hour labels) */}
             <FormField
               control={form.control}
               name="collectionTimeSlot"
@@ -181,7 +185,7 @@ export const StepTwo: React.FC<StepTwoProps> = ({ initialData, onNext, onBack })
                 <FormItem>
                   <FormLabel className="flex items-center gap-2">
                     <Clock className="w-4 h-4" />
-                    Collection Time *
+                    Collection Time (24-hour) *
                   </FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
