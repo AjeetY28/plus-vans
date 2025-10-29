@@ -125,11 +125,9 @@ export const StepThree = ({ initialData, onSubmit, onBack }: StepThreeProps) => 
               name="wasteTypes"
               render={({ field }) => (
                 <FormItem className="mt-2">
-                  <FormDescription className="mb-3">
-                    Select all that apply for this job
-                  </FormDescription>
+                
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {WASTE_TYPES.map((label) => {
                       const checked = field.value?.includes(label) ?? false;
                       return (
