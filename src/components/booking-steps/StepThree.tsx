@@ -27,9 +27,12 @@ import {
   Loader2,
   CreditCard,
   Banknote,
-  Smartphone,
   Clock3,
+  Landmark, // 🏦 bank icon
 } from "lucide-react";
+
+/* 🔶 Stripe */
+import { CardElement, useElements, useStripe } from "@stripe/react-stripe-js";
 
 /** ✅ Keep labels EXACTLY as backend expects */
 const WASTE_TYPES = [
@@ -55,7 +58,7 @@ const notificationOptions = [
 const PAYMENT_METHODS = [
   { id: "cash", label: "Cash", icon: Banknote },
   { id: "card", label: "Card", icon: CreditCard },
-  { id: "online", label: "Online Transfer", icon: Smartphone },
+  { id: "bank", label: "Bank Transfer", icon: Landmark },
 ];
 
 /** ⏱️ Time slot rules — SAME as backend (Apps Script) */
@@ -95,6 +98,10 @@ interface StepThreeProps {
 export const StepThree = ({ initialData, onSubmit, onBack }: StepThreeProps) => {
   const [submitting, setSubmitting] = useState(false);
 
+  /* 🔶 Stripe hooks */
+  const stripe = useStripe();
+  const elements = useElements();
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -120,22 +127,97 @@ export const StepThree = ({ initialData, onSubmit, onBack }: StepThreeProps) => 
   const paymentLabel =
     PAYMENT_METHODS.find((m) => m.id === form.watch("paymentMethod"))?.label || "";
 
+  /* 🔶 Create PaymentIntent via Apps Script (uses your .env key) *//* 🔶 Create PaymentIntent via Apps Script (uses your .env URL) */
+async function createPaymentIntentOnServer(amount: number) {
+  const url = import.meta.env.VITE_SHEETS_WEB_APP_URL; // already set in your .env
+  if (!url) throw new Error("Web App URL missing");
+
+  // Make it a "simple" CORS request (no preflight)
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      action: "createPaymentIntent",
+      amountPence: Math.round(amount * 100),
+      refHint: initialData?.contactName || "Plus Vans",
+      email: (initialData as any)?.email,
+      name: initialData?.contactName,
+    }),
+    redirect: "follow",
+  });
+
+  // Helpful diagnostics if GAS throws HTML or empty text
+  const raw = await res.text();
+  let json: any;
+  try { json = JSON.parse(raw); } catch {
+    throw new Error(`Server returned non-JSON:\n${raw?.slice(0,300) || "(empty)"}`);
+  }
+  if (!json.ok) throw new Error(json.error || "Failed to create PaymentIntent");
+  return json.client_secret as string;
+}
+
   const handleSubmit = async (values: z.infer<typeof formSchema>) => {
     try {
       setSubmitting(true);
+
+      // 🔶 Card flow → pre-charge
+      if (values.paymentMethod === "card") {
+        if (!stripe || !elements) throw new Error("Stripe not ready");
+
+        const clientSecret = await createPaymentIntentOnServer(amountGBP);
+
+        const card = elements.getElement(CardElement);
+        if (!card) throw new Error("Card element missing");
+
+        const { paymentIntent, error } = await stripe.confirmCardPayment(clientSecret, {
+          payment_method: {
+            card,
+            billing_details: {
+              name: initialData.contactName,
+              email: (initialData as any)?.email,
+              phone: (initialData as any)?.phoneNumber,
+            },
+          },
+        });
+
+        if (error) throw new Error(error.message || "Payment failed");
+        if (paymentIntent?.status !== "succeeded") throw new Error("Payment not completed");
+
+        const normalized: Partial<BookingFormData> = {
+          notificationMethods: toApiMethods(values.notificationMethods),
+          wasteTypes: values.wasteTypes ?? [],
+          // @ts-expect-error allow passthrough
+          wasteTypesSelected: values.wasteTypes ?? [],
+          specialInstructions: values.specialInstructions?.trim() || undefined,
+          urgentJob: values.urgentJob,
+          // extra fields for backend/Sheets
+          // @ts-expect-error extra fields allowed
+          paymentMethod: "card",
+          // @ts-expect-error extra fields allowed
+          paymentStatus: "Paid",
+          // @ts-expect-error extra fields allowed
+          paymentIntentId: paymentIntent.id,
+        };
+        await onSubmit(normalized);
+        return;
+      }
+
+      // 🔶 Non-card → just store choice
       const normalized: Partial<BookingFormData> = {
         notificationMethods: toApiMethods(values.notificationMethods),
         wasteTypes: values.wasteTypes ?? [],
-        // for Sheets + email compatibility
         // @ts-expect-error allow passthrough
         wasteTypesSelected: values.wasteTypes ?? [],
         specialInstructions: values.specialInstructions?.trim() || undefined,
         urgentJob: values.urgentJob,
-        // ⬇️ save payment method
-        // @ts-expect-error back-compat on interface
+        // @ts-expect-error extra fields allowed
         paymentMethod: values.paymentMethod,
+        // @ts-expect-error extra fields allowed
+        paymentStatus: "Unpaid",
       };
       await onSubmit(normalized);
+    } catch (err: any) {
+      alert(err.message || "Payment error");
     } finally {
       setSubmitting(false);
     }
@@ -259,6 +341,51 @@ export const StepThree = ({ initialData, onSubmit, onBack }: StepThreeProps) => 
                 </FormItem>
               )}
             />
+
+            {/* 🔶 Show Stripe CardElement ONLY when Card selected */}
+            {form.watch("paymentMethod") === "card" && (
+              <div className="mt-4 rounded-lg border p-4 bg-card">
+                <p className="text-sm font-medium mb-2">Enter card details</p>
+                <div className="rounded-md border px-3 py-2">
+                  <CardElement
+                    options={{
+                      hidePostalCode: true,
+                      style: { base: { fontSize: "16px" } },
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  You will be charged <b>£{amountGBP.toFixed(2)}</b> for this time slot.
+                </p>
+              </div>
+            )}
+
+            {/* 🔶 Show Bank details panel ONLY when Bank Transfer selected */}
+            {form.watch("paymentMethod") === "bank" && (
+              <div className="mt-4 rounded-lg border p-4 bg-card">
+                <p className="text-sm font-medium mb-2">Bank transfer details</p>
+                <div className="rounded-md border px-4 py-3 bg-background">
+                  <p className="text-sm"><b>Account Name:</b> Plus Vans Group Ltd</p>
+                  <p className="text-sm"><b>Account Number:</b> 23594402</p>
+                  <p className="text-sm"><b>Sortcode:</b> 230801</p>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Please complete the transfer and include your name as reference.
+                </p>
+              </div>
+            )}
+
+            {/* 🔶 Show Cash info panel ONLY when Cash selected */}
+            {form.watch("paymentMethod") === "cash" && (
+              <div className="mt-4 rounded-lg border p-4 bg-card">
+                <p className="text-sm font-medium mb-2">Cash on Delivery Selected</p>
+                <div className="rounded-md border px-4 py-3 bg-background">
+                  <p className="text-sm">
+                    We will collect payment in cash when we arrive. Your booking is confirmed.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Special instructions (optional) */}
@@ -390,7 +517,8 @@ export const StepThree = ({ initialData, onSubmit, onBack }: StepThreeProps) => 
                 </span>
               ) : (
                 <>
-                  Confirm booking — £{amountGBP.toFixed(2)}
+                  {form.watch("paymentMethod") === "card" ? "Pay & Confirm" : "Confirm booking"}
+                  {" — £"}{amountGBP.toFixed(2)}
                   {paymentLabel ? ` via ${paymentLabel}` : ""}
                 </>
               )}
