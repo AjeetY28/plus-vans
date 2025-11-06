@@ -14,11 +14,87 @@ import { Input } from "@/components/ui/input";
 import { BookingFormData } from "@/components/BookingForm";
 import { User, Building2, Phone, Mail } from "lucide-react";
 
+/* ✅ Phone + Email validators */
+import { isValidPhoneNumber, parsePhoneNumberFromString } from "libphonenumber-js/min";
+import isEmail from "validator/es/lib/isEmail";
+
+/* ---- small disposable-domain guard (optional) ---- */
+const DISPOSABLE = new Set([
+  "yopmail.com",
+  "mailinator.com",
+  "guerrillamail.com",
+  "10minutemail.com",
+  "sharklasers.com",
+  "tempmail.com",
+]);
+
+/* ---- helpers ---- */
+const looksSequentialOrRepeated = (digits: string) => {
+  // strip non-digits then check patterns like 000000..., 111111..., 123456..., 987654...
+  const d = digits.replace(/\D/g, "");
+  if (!d) return false;
+  if (/^(\d)\1{5,}$/.test(d)) return true;
+  const seq = "01234567890123456789";
+  const rseq = "98765432109876543210";
+  return seq.includes(d) || rseq.includes(d);
+};
+
+/* ---------- PHONE: UK mobile only (07… / +447…) ---------- */
+const ukMobile = z
+  .string()
+  .trim()
+  .refine((v) => {
+    const raw = v.replace(/\s+/g, "");
+    const e164 = raw.startsWith("+")
+      ? raw
+      : raw.startsWith("0")
+      ? "+44" + raw.slice(1)
+      : "+44" + raw; // fallback
+
+    // Must be UK mobile format
+    const isGbMobilePattern = /^\+447\d{9}$/.test(e164);
+    if (!isGbMobilePattern) return false;
+
+    // Structure-valid per libphonenumber
+    if (!isValidPhoneNumber(e164, "GB")) return false;
+
+    // Reject obvious dummy patterns
+    const national = e164.replace(/^\+44/, "0");
+    if (looksSequentialOrRepeated(national)) return false;
+
+    // Optionally ensure it's classified as MOBILE by lib
+    const parsed = parsePhoneNumberFromString(e164);
+    if (!parsed) return false;
+    const t = parsed.getType?.(); // 'MOBILE', 'FIXED_LINE', etc.
+    if (t && t !== "MOBILE") return false;
+
+    return true;
+  }, "Enter a valid UK mobile number");
+
+/* ---------- EMAIL ---------- */
+const emailSchema = z
+  .string()
+  .trim()
+  .transform((v) => v.toLowerCase())
+  .refine(
+    (v) =>
+      isEmail(v, {
+        allow_display_name: false,
+        require_tld: true,
+        domain_specific_validation: true,
+      }),
+    "Please enter a valid email"
+  )
+  .refine((v) => {
+    const domain = v.split("@")[1] || "";
+    return !DISPOSABLE.has(domain);
+  }, "Disposable email domains are not allowed");
+
 const formSchema = z.object({
   contactName: z.string().min(2, "Contact name must be at least 2 characters"),
   companyName: z.string().optional(),
-  phoneNumber: z.string().regex(/^(?:(?:\+44\s?|0)(?:\d\s?){9,10})$/, "Please enter a valid UK phone number"),
-  email: z.string().email("Please enter a valid email"),
+  phoneNumber: ukMobile,   // ✅ strict UK mobile validation
+  email: emailSchema,      // ✅ robust email validation
 });
 
 interface StepOneProps {
@@ -28,6 +104,7 @@ interface StepOneProps {
 
 export const StepOne = ({ initialData, onNext }: StepOneProps) => {
   const form = useForm<z.infer<typeof formSchema>>({
+    mode: "onChange",
     resolver: zodResolver(formSchema),
     defaultValues: {
       contactName: initialData.contactName,
@@ -98,11 +175,7 @@ export const StepOne = ({ initialData, onNext }: StepOneProps) => {
                   Phone Number *
                 </FormLabel>
                 <FormControl>
-                  <Input 
-                    type="tel" 
-                    placeholder="07700 900123" 
-                    {...field} 
-                  />
+                  <Input type="tel" placeholder="+441234567890" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -119,19 +192,15 @@ export const StepOne = ({ initialData, onNext }: StepOneProps) => {
                   Email Address *
                 </FormLabel>
                 <FormControl>
-                  <Input 
-                    type="email" 
-                    placeholder="john@example.com" 
-                    {...field} 
-                  />
+                  <Input type="email" placeholder="john@example.com" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
             )}
           />
 
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             className="w-full bg-gradient-primary hover:opacity-90 transition-opacity"
             size="lg"
           >
@@ -142,3 +211,5 @@ export const StepOne = ({ initialData, onNext }: StepOneProps) => {
     </div>
   );
 };
+
+export default StepOne;
